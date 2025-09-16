@@ -1,0 +1,124 @@
+# -----------------------------
+# OS / IDE / Editor
+# -----------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.code-workspace
+.vscode/
+.idea/
+*.iml
+
+# -----------------------------
+# Python bytecode / build
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.build/
+build/
+dist/
+.eggs/
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+.venv*/
+
+# -----------------------------
+# Testing / tooling caches
+# -----------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# -----------------------------
+# Logs and debug
+# -----------------------------
+logs/
+*.log
+nohup.out
+
+# -----------------------------
+# Training runs & artifacts
+# -----------------------------
+runs/
+**/checkpoints/
+**/outputs/
+**/artifacts/
+wandb/
+# Common model files
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.tflite
+*.nemo
+*.h5
+*.pb
+*.mlmodel
+*.pkl
+*.npz
+*.npy
+
+# -----------------------------
+# Hugging Face / model hubs cache
+# -----------------------------
+hf_cache/
+# fallback names if changed in future
+.huggingface/
+transformers_cache/
+
+# -----------------------------
+# Datasets / large media (keep data paths outside repo)
+# -----------------------------
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# -----------------------------
+# Metadata generated files
+# -----------------------------
+metadata/combined_metadata.json
+metadata/combined_metadata.csv
+
+# -----------------------------
+# Shell / script artifacts
+# -----------------------------
+*.pid
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+
+# -----------------------------
+# Notebooks
+# -----------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# -----------------------------
+# Misc
+# -----------------------------
+.ssh/
+*.crt
+*.key
+*.pem
