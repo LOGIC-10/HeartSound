@@ -24,6 +24,10 @@ class HeartMambaConfig:
     backbone_sample_rate: int = 16000
     freeze_backbone: bool = True
     metadata_dim: int = 64
+    # Phase/Cycle aware options
+    phase_gating: bool = False
+    phase_kernel: int = 15
+    phase_strength: float = 0.5  # 0..1
 
 
 class SimpleSSMBlock(nn.Module):
@@ -146,6 +150,11 @@ class HeartMambaFormer(nn.Module):
             self.waveform_resampler = torchaudio.transforms.Resample(orig_freq=4000, new_freq=config.backbone_sample_rate)
             self.backbone_proj = nn.Linear(self.waveform_backbone.config.hidden_size, config.hidden_dim)
 
+        # phase gating smoothing kernel (on Mel frame axis)
+        self.phase_kernel = max(1, int(config.phase_kernel))
+        if self.phase_kernel % 2 == 0:
+            self.phase_kernel += 1  # ensure odd for symmetric smoothing
+
     def _encode_waveform_backbone(self, waveforms: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         if self.waveform_backbone is None:
             return torch.zeros(waveforms.size(0), waveforms.size(1), self.config.hidden_dim, device=waveforms.device)
@@ -162,23 +171,64 @@ class HeartMambaFormer(nn.Module):
         hidden = hidden * mask.unsqueeze(-1)
         return hidden
 
+    def _phase_weights_from_waveform(self, waveforms: torch.Tensor, t_frames: int, device: torch.device) -> torch.Tensor:
+        """Compute normalized energy envelope per location and downsample to Mel frames.
+
+        Args:
+            waveforms: (B, L, S) at 4kHz
+            t_frames: target number of Mel frames
+        Returns:
+            weights: (B*L, t_frames, 1) in [0,1], smoothed
+        """
+        b, l, s = waveforms.shape
+        x = waveforms.view(b * l, 1, s).abs()  # (B*L, 1, S)
+        # Downsample by approximate hop length used in Mel transform (256 at 4kHz)
+        hop = max(1, s // max(1, t_frames))
+        k = hop
+        env = torch.nn.functional.avg_pool1d(x, kernel_size=k, stride=hop, padding=k // 2)
+        # Adjust length to exactly t_frames
+        if env.shape[-1] != t_frames:
+            env = torch.nn.functional.interpolate(env, size=t_frames, mode="linear", align_corners=False)
+        # Normalize per sample to [0,1]
+        env = env.squeeze(1)  # (B*L, T)
+        min_v = env.amin(dim=-1, keepdim=True)
+        max_v = env.amax(dim=-1, keepdim=True)
+        weights = (env - min_v) / (max_v - min_v + 1e-6)
+        # Smooth on frame axis
+        pad = self.phase_kernel // 2
+        weights = torch.nn.functional.pad(weights.unsqueeze(1), (pad, pad), mode="reflect")
+        kernel = torch.ones(1, 1, self.phase_kernel, device=device) / float(self.phase_kernel)
+        weights = torch.nn.functional.conv1d(weights, kernel).squeeze(1)
+        # Clip to [0,1]
+        weights = weights.clamp(0.0, 1.0)
+        return weights.unsqueeze(-1)  # (B*L, T, 1)
+
     def forward(self, batch: Dict[str, torch.Tensor | List[Dict[str, str]]]) -> Dict[str, torch.Tensor]:
         mel: torch.Tensor = batch["mel"]  # (B, L, C, T)
         mask: torch.Tensor = batch["mask"]  # (B, L)
         labels: torch.Tensor = batch["labels"]
         metadata: List[Dict[str, str]] = batch["metadata"]  # type: ignore[assignment]
+        waveforms_full: torch.Tensor = batch["waveforms"]  # (B, L, 1, S)
 
         batch_size, num_locations, _, time_dim = mel.shape
         mel = mel.view(batch_size * num_locations, -1, time_dim)
         features = self.input_proj(mel)
         features = features.transpose(1, 2)  # (B*L, T, hidden)
+        # Phase-aware gating on temporal features using waveform energy envelope
+        if self.config.phase_gating:
+            with torch.no_grad():
+                # detach waveforms for gating weights
+                wave_w = waveforms_full.squeeze(2).to(mel.device)
+                weights = self._phase_weights_from_waveform(wave_w, features.size(1), device=mel.device)
+            strength = float(self.config.phase_strength)
+            features = features * (1.0 - strength + strength * weights)
         for layer in self.ssm_layers:
             features = layer(features)
         temporal_pooled = features.mean(dim=1)
         temporal_pooled = temporal_pooled.view(batch_size, num_locations, -1)
         temporal_pooled = temporal_pooled * mask.unsqueeze(-1)
 
-        waveform_features = self._encode_waveform_backbone(batch["waveforms"].squeeze(2), mask)
+        waveform_features = self._encode_waveform_backbone(waveforms_full.squeeze(2), mask)
         fused = temporal_pooled + waveform_features
 
         pooled = self.location_pool(fused, mask)
